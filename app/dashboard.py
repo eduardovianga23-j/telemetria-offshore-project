@@ -1,21 +1,25 @@
+import os
 import streamlit as st
 import requests
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
+# Configuração inicial do layout da página
 st.set_page_config(page_title="Digital Twin - Telemetria Offshore", page_icon="⚓", layout="wide")
 st.markdown('<meta name="google" content="notranslate">', unsafe_allow_html=True)
 
-BASE_API_URL = "http://127.0.0.1:8000"
+# Configuração da URL da API suportando variáveis de ambiente (Crucial para Docker)
+BASE_API_URL = os.getenv("BASE_API_URL", "http://127.0.0.1:8000")
 API_HISTORICO_URL = f"{BASE_API_URL}/api/historico"
 API_ML_RETRAIN_URL = f"{BASE_API_URL}/api/ml/retreinar"
 API_COMANDO_URL = f"{BASE_API_URL}/api/comando"
 
 LIMITE_CRITICO = 150.0
+PRECO_M3_OLEO = 450.0  # Preço estimado por m³ de petróleo (~ $70-75/barril)
 
 # ==============================================================================
-# ⚙️ SIDEBAR (Executada fora do fragmento para evitar erros)
+# ⚙️ SIDEBAR (Executada fora do fragmento)
 # ==============================================================================
 st.sidebar.header("⚙️ Configurações & Filtros")
 
@@ -28,7 +32,7 @@ if st.sidebar.button("🔄 Retreinar Modelo com BD", use_container_width=True):
             if res.status_code == 200:
                 dados_ml = res.json()
                 status_box.update(label="✅ Modelo Atualizado!", state="complete")
-                st.sidebar.success("Treino concluído com sucesso!")
+                st.sidebar.success("Treino concluído e guardado em disco!")
                 st.sidebar.metric("Amostras Treinadas", dados_ml.get("total_amostras", 0))
                 st.sidebar.metric(
                     "Anomalias Detetadas", 
@@ -47,7 +51,6 @@ st.sidebar.divider()
 # 🎯 Filtros Estáticos
 st.sidebar.subheader("🎯 Filtros de Visualização")
 
-# Tenta procurar poços conhecidos ou usa opções padrão
 poco_selecionado = st.sidebar.selectbox(
     "Selecionar Poço:", 
     ["TODOS", "Poco_Bloco17_A", "Poco_Bloco17_B", "Poco_Bloco32_C"], 
@@ -66,11 +69,11 @@ filtro_status = st.sidebar.multiselect(
 # ⚓ TÍTULO DA PÁGINA
 # ==============================================================================
 st.title("⚓ Sala de Controle e Telemetria - Bloco 17 e 32")
-st.caption("Monitorização em tempo real com atuação remota e IA.")
+st.caption("Monitorização em tempo real com atuação remota, IA e impacto financeiro.")
 
 
 # ==============================================================================
-# 🔄 FRAGMENTO (Apenas renderiza o painel e dados no corpo principal)
+# 🔄 FRAGMENTO (Renderização e atualização contínua)
 # ==============================================================================
 @st.fragment(run_every="3s")
 def render_dashboard(poco_sel, status_sel):
@@ -81,7 +84,7 @@ def render_dashboard(poco_sel, status_sel):
             return
         data = response.json()
     except Exception as e:
-        st.error(f"Não foi possível ligar à API: {e}")
+        st.error(f"Não foi possível ligar à API em '{BASE_API_URL}': {e}")
         return
 
     df = pd.DataFrame(data)
@@ -102,7 +105,7 @@ def render_dashboard(poco_sel, status_sel):
     if "status_seguranca" in df_filtrado.columns and status_sel:
         df_filtrado = df_filtrado[df_filtrado["status_seguranca"].isin(status_sel)]
 
-    # 🚨 BANNERS E BOTÃO DE ALÍVIO
+    # 🚨 BANNERS E BOTÃO DE ALÍVIO DE PRESSÃO (SISTEMA DE SAFETY/FLARE)
     ultima_leitura = df_filtrado.iloc[-1] if not df_filtrado.empty else None
 
     if ultima_leitura is not None:
@@ -128,7 +131,7 @@ def render_dashboard(poco_sel, status_sel):
                         if res.status_code == 200:
                             st.toast(f"✅ Comando de alívio enviado para {poco_val}!", icon="🛠️")
                         else:
-                            st.toast("❌ Falha ao enviar comando.", icon="⚠️")
+                            st.toast("❌ Falha ao enviar comando de alívio.", icon="⚠️")
                     except Exception as err:
                         st.toast(f"Erro de conexão: {err}", icon="❌")
         else:
@@ -136,7 +139,7 @@ def render_dashboard(poco_sel, status_sel):
                 f"✅ **[SISTEMA NORMAL]** Última leitura do poço **{poco_val}**: **{pressao_val:.2f} bar** | Status: **{status_seg}**"
             )
 
-    # 📊 KPIs PRINCIPAIS
+    # 📊 KPIs PRINCIPAIS E IMPACTO FINANCEIRO
     col1, col2, col3, col4, col5 = st.columns(5)
 
     if ultima_leitura is not None:
@@ -152,10 +155,22 @@ def render_dashboard(poco_sel, status_sel):
         delta_t = f"{temp_atual - leitura_anterior['temperatura_celsius']:.2f} °C" if leitura_anterior is not None else None
         col3.metric("Temperatura", f"{temp_atual:.2f} °C", delta=delta_t)
 
-        col4.metric("Vazão de Óleo", f"{ultima_leitura.get('vazao_m3h', 0):.2f} m³/h")
+        vazao_atual = float(ultima_leitura.get('vazao_m3h', 400.0) or 400.0)
+        col4.metric("Vazão de Óleo", f"{vazao_atual:.2f} m³/h")
 
-        pico_pressao = df_filtrado["pressao_bar"].max() if not df_filtrado.empty else 0
-        col5.metric("Pico de Pressão", f"{pico_pressao:.2f} bar")
+        # 💶 KPI FINANCEIRO (Custo do Flare vs Receita Teórica)
+        if status_seg == "CRÍTICO":
+            # Perda estimada em queima de gás/desvio de emergência (15% da vazão direcionada ao flare)
+            custo_flare_hora = vazao_atual * PRECO_M3_OLEO * 0.15
+            col5.metric(
+                "Risco Financ. (Flare)", 
+                f"€ {custo_flare_hora:,.2f} /h", 
+                delta="PERDA ELEVADA", 
+                delta_color="inverse"
+            )
+        else:
+            valor_producao_hora = vazao_atual * PRECO_M3_OLEO
+            col5.metric("Receita Est. Produção", f"€ {valor_producao_hora:,.2f} /h")
 
     st.divider()
 
@@ -201,7 +216,7 @@ def render_dashboard(poco_sel, status_sel):
         )
         st.plotly_chart(fig_t, use_container_width=True)
 
-    # 📋 TABELA
+    # 📋 TABELA DE TELEMETRIA RECENTE
     st.subheader("📋 Tabela de Leituras Recentes")
     st.dataframe(
         df_filtrado.sort_values(by="timestamp", ascending=False).head(20), 
@@ -209,5 +224,5 @@ def render_dashboard(poco_sel, status_sel):
         hide_index=True
     )
 
-# Chama o fragmento passando os valores capturados na Sidebar
+# Executa o fragmento com os filtros da sidebar
 render_dashboard(poco_selecionado, filtro_status)
