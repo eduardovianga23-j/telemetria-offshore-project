@@ -1,12 +1,34 @@
+import asyncio
+from contextlib import asynccontextmanager
+from datetime import datetime
+from typing import List, Optional
+
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
-from typing import List, Optional
-from datetime import datetime
+
+# IMPORTANTE: Ajusta o caminho da importação abaixo caso a tua função/módulo do simulador
+# esteja em outro ficheiro (ex: de run import simular_telemetria ou app.simulator import simular_telemetria)
+from run import simular_telemetria
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # --- INICIALIZAÇÃO: Roda o simulador em background ---
+    # Usamos asyncio.to_thread para não bloquear o loop principal do FastAPI caso a simulação use time.sleep
+    task = asyncio.create_task(asyncio.to_thread(simular_telemetria))
+    print("🚀 Simulador de telemetria iniciado em segundo plano!")
+    
+    yield  # A API fica em execução aqui
+    
+    # --- ENCERRAMENTO: Cancela a tarefa ao desligar ---
+    task.cancel()
+
 
 app = FastAPI(
     title="Digital Twin - API Offshore",
     description="API REST para receção de telemetria, comandos remotos e MLOps",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 db_telemetria: List[dict] = []
