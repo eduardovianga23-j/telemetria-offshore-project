@@ -88,6 +88,9 @@ Podes executar este projeto de **duas formas**: através do **Docker** (recomend
 
 Com o Docker, **não precisas de instalar o `requirements.txt` na tua máquina física**. O Docker cria ambientes isolados, instala as dependências internamente e inicia a API, o Simulador e o Dashboard simultaneamente.
 
+Para Iniciar os containers com Docker Compose, instalar as dependências, executar o programa, com um único comando no terminal: `docker-compose up --build`
+
+
 1. **Clonar o repositório:**
    ```bash
    git clone [https://github.com/eduardovianga23-j/telemetria-poço-offshore.git](https://github.com/eduardovianga23-j/telemetria-poço-offshore.git)
