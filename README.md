@@ -90,6 +90,13 @@ Com o Docker, **não precisas de instalar o `requirements.txt` na tua máquina f
 
 Para Iniciar os containers com Docker Compose, instalar as dependências, executar o programa, com um único comando no terminal: `docker-compose up --build`
 
+## 🌐 Acesso aos Serviços (Com o Docker a correr)
+
+Assim que executares `docker compose up --build`, podes aceder aos serviços nos seguintes endereços locais:
+
+* **📊 Dashboard de Operação (Streamlit):** [http://localhost:8501](http://localhost:8501)
+* **⚙️ Documentação da API (FastAPI / Swagger):** [http://localhost:8000/docs](http://localhost:8000/docs)
+
 
 1. **Clonar o repositório:**
    ```bash
