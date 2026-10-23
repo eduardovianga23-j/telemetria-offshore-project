@@ -20,24 +20,7 @@ e 32 de Angola. Funciona em dois modos:
 
 ## Arquitetura
 
-```mermaid
-flowchart LR
-    subgraph OT["Rede industrial (campo)"]
-        CAMPO["campo<br/>simulador / gateway"]
-    end
-    subgraph IT["Rede de IT"]
-        API["api<br/>FastAPI + SQLite"]
-        MON["monitor<br/>dashboard só leitura :8501"]
-    end
-    subgraph SC["Sala de controlo (rede local)"]
-        CON["consola<br/>dashboard de controlo :8502"]
-    end
-
-    CAMPO -- "envia telemetria" --> API
-    CAMPO -- "vai buscar comandos" --> API
-    MON -- "lê" --> API
-    CON -- "cria comandos (chave de controlo)" --> API
-```
+![Arquitetura do sistema](docs/img/arquitetura.png)
 
 Decisões de desenho:
 
@@ -54,6 +37,10 @@ Decisões de desenho:
   operador, estado e hora de execução.
 - **A API decide o estado de segurança.** O emissor não pode marcar uma
   leitura como "OK".
+
+O ciclo de vida de um comando, do clique na consola até à execução no poço:
+
+![Ciclo de vida de um comando](docs/img/ciclo-comando.png)
 
 ## Componentes
 
