@@ -118,7 +118,7 @@ try:
 except requests.RequestException:
     pocos = []
 poco_sel = st.sidebar.selectbox(t("poco"), [TODOS, *pocos], format_func=lambda p: t("todos") if p == TODOS else p)
-janela = st.sidebar.slider(t("leituras"), 50, 2000, 300, step=50)
+janela = st.sidebar.slider(t("leituras"), 50, 5000, 300, step=50)
 st.sidebar.caption(t("limites", atencao=LIM_ATENCAO, critico=LIM_CRITICO))
 st.sidebar.caption(t("preco", preco=info["preco_barril_usd"]))
 
