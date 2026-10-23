@@ -1,21 +1,39 @@
+"""Ligação à base de dados (SQLite por defeito, PostgreSQL/TimescaleDB no futuro)."""
+from __future__ import annotations
+
+from collections.abc import Iterator
+
 from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-# Nome do ficheiro da base de dados local
-SQLALCHEMY_DATABASE_URL = "sqlite:///./telemetria.db"
-# Para PostgreSQL no futuro, seria: "postgresql://user:password@localhost/telemetria_db"
 
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
-)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+class Base(DeclarativeBase):
+    pass
 
-Base = declarative_base()
 
-# Helper para gerir a sessão da BD em cada pedido da API
-def get_db():
-    db = SessionLocal()
+_engine: Engine | None = None
+_SessionLocal: sessionmaker[Session] | None = None
+
+
+def init_db(db_url: str) -> Engine:
+    """Cria o motor da BD e as tabelas. Chamado no arranque da API."""
+    global _engine, _SessionLocal
+    connect_args = {"check_same_thread": False} if db_url.startswith("sqlite") else {}
+    _engine = create_engine(db_url, connect_args=connect_args)
+    _SessionLocal = sessionmaker(bind=_engine, autoflush=False, expire_on_commit=False)
+
+    from app import models  # noqa: F401  (regista as tabelas)
+
+    Base.metadata.create_all(_engine)
+    return _engine
+
+
+def get_db() -> Iterator[Session]:
+    """Dependência do FastAPI: uma sessão por pedido."""
+    if _SessionLocal is None:
+        raise RuntimeError("Base de dados não inicializada: chame init_db() primeiro.")
+    db = _SessionLocal()
     try:
         yield db
     finally:

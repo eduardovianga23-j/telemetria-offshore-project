@@ -1,104 +1,173 @@
-# ⚓ Digital Twin & Telemetria Offshore — Bloco 17 & 32
+# Digital Twin & Telemetria Offshore — Blocos 17 e 32
 
-Sistema de monitorização em tempo real, análise de risco visual e atuação remota para poços de petróleo offshore. O projeto simula a operação de um **Gêmeo Digital (Digital Twin)**, unindo geração contínua de telemetria, API REST de controlo, interface analítica interativa e cálculos de impacto financeiro em tempo real.
+Sistema de monitorização em tempo real para poços de petróleo offshore, com
+deteção de anomalias, comandos de atuação auditados e separação entre a rede
+de monitorização e a sala de controlo.
 
----
+A arquitetura foi pensada para operações de águas profundas como os Blocos 17
+e 32 de Angola. Funciona em dois modos:
 
-## 🎯 Objetivo e Contexto da Indústria
+| Modo | Dados | Para que serve |
+|---|---|---|
+| `simulacao` (por defeito) | Três poços fictícios (`B17-A`, `B17-B`, `B32-C`) com um modelo físico simplificado | Demonstração em tempo real, alertas e comandos |
+| `volve` | Replay dos dados reais de produção do campo Volve (Equinor) | Validar o sistema com dados reais |
 
-Em operações petrolíferas offshore (em alto-mar), a pressão na cabeça do poço (*wellhead pressure*) é uma das variáveis mais críticas para a integridade operacional. Uma sobrepressão não detetada pode causar acidentes graves, danos aos equipamentos submarinos, paragens não programadas da produção ou a necessidade de queima de gás de emergência (*flaring*), gerando elevadas perdas financeiras e ambientais.
-
-**O objetivo deste projeto é demonstrar como uma arquitetura moderna de software resolve esse desafio ao:**
-1. **Visualizar a saúde física do poço em tempo real** através de um Dashboard de Digital Twin.
-2. **Alertar automaticamente** sobre anomalias de pressão acima do limite de segurança (150 bar).
-3. **Permitir a atuação remota imediata (Alívio de Pressão)** para reverter estados de emergência diretamente a partir da sala de controlo.
-4. **Calcular o impacto financeiro contínuo** de perdas operacionais associadas ao risco.
-
----
-
-## 🛠️ Tecnologias Utilizadas
-
-* **Linguagem Principal:** Python 3.10+
-* **Backend / API REST:** FastAPI & Uvicorn (alta performance e validação de dados com Pydantic)
-* **Frontend & Dashboard:** Streamlit (interface interativa) & Plotly (gráficos dinâmicos com zonas de risco)
-* **Manipulação de Dados:** Pandas & Requests
-* **DevOps & Containerização:** Docker & Docker Compose
+> **Nota:** este é um projeto pessoal e académico. Não tem relação com
+> nenhuma operadora e não usa dados confidenciais. Os parâmetros da simulação
+> são plausíveis, não reais.
 
 ---
 
-## 🗂️ Estrutura e Explicação de Cada Ficheiro
+## Arquitetura
 
-| Ficheiro / Pasta | Função e Descrição Detalhada |
-| :--- | :--- |
-| **`app/main.py`** | **API REST (FastAPI):** Atua como o servidor central. Contém os endpoints para receber os dados de telemetria enviados pelo simulador, consultar o histórico armazenado de cada poço e processar o comando remoto de alívio de pressão. |
-| **`app/simulator.py`** | **Serviço de Telemetria (Python):** Roda em segundo plano simulando sensores de campo (*sensors feed*). Gera continuamente leituras estocásticas de Pressão (bar), Temperatura (°C) e Vazão (m³/d) para os poços `POCO-01`, `POCO-02` e `POCO-03` e envia-as via `POST` para a API. |
-| **`app/dashboard.py`** | **Interface de Operação (Streamlit + Plotly):** É o painel visual do operador offshore. Lê os dados da API a cada poucos segundos, calcula indicadores dinâmicos, desenha gráficos com pontos críticos e fornece os controlos de atuação remota. |
-| **`docker-compose.yml`** | **Orquestrador de Containers:** Define e conecta os 3 serviços (`api`, `simulator` e `dashboard`), criando uma rede interna isolada para que comuniquem entre si automaticamente sem necessidade de configuração manual. |
-| **`Dockerfile`** | **Receita de Build:** Define a imagem base do Python, copia o código-fonte para dentro do container e instala todas as bibliotecas necessárias. |
-| **`requirements.txt`** | **Ficheiro de Dependências:** Lista todas as bibliotecas Python necessárias para que o projeto rode (`fastapi`, `uvicorn`, `streamlit`, `plotly`, `pandas`, `requests`). |
-| **`README.md`** | Documentação técnica completa e detalhada do projeto. |
+```mermaid
+flowchart LR
+    subgraph OT["Rede industrial (campo)"]
+        CAMPO["campo<br/>simulador / gateway"]
+    end
+    subgraph IT["Rede de IT"]
+        API["api<br/>FastAPI + SQLite"]
+        MON["monitor<br/>dashboard só leitura :8501"]
+    end
+    subgraph SC["Sala de controlo (rede local)"]
+        CON["consola<br/>dashboard de controlo :8502"]
+    end
+
+    CAMPO -- "envia telemetria" --> API
+    CAMPO -- "vai buscar comandos" --> API
+    MON -- "lê" --> API
+    CON -- "cria comandos (chave de controlo)" --> API
+```
+
+Decisões de desenho:
+
+- **O campo liga-se para fora, nunca o contrário.** O gateway envia as
+  leituras e vai buscar os comandos pendentes. A API não abre ligações para a
+  rede industrial.
+- **Monitorizar e controlar são coisas separadas.** O dashboard de
+  monitorização não tem botões nem chave de controlo. Só a consola, presa a
+  `127.0.0.1`, pode criar comandos. Num ambiente real, o monitor seria
+  publicado atrás de uma camada de acesso como o Cloudflare Access, e a
+  consola nunca sairia da rede local.
+- **O histórico nunca é alterado.** Um comando muda o estado do poço; as
+  leituras seguintes refletem essa mudança. Cada comando fica registado com
+  operador, estado e hora de execução.
+- **A API decide o estado de segurança.** O emissor não pode marcar uma
+  leitura como "OK".
+
+## Componentes
+
+| Ficheiro | Função |
+|---|---|
+| `app/main.py` | API REST: telemetria, histórico, comandos com auditoria, retreino do modelo |
+| `app/physics.py` | Modelo físico do poço: pressão com inércia, picos, choke, caudal e temperatura relacionados, válvula de alívio |
+| `app/simulator.py` | Gateway de campo: modo simulação ou replay do Volve |
+| `app/volve.py` | Leitor do ficheiro de produção do Volve |
+| `app/ml_engine.py` | Deteção de anomalias com Isolation Forest |
+| `app/dashboard.py` | Dashboard Streamlit, em modo monitorização ou consola de controlo |
+| `app/config.py` | Configuração por variáveis de ambiente e regra de segurança única |
+| `app/models.py`, `app/database.py`, `app/schemas.py` | Base de dados e contratos de dados |
+| `tests/` | Testes automáticos (pytest) |
+
+## O modelo físico
+
+Não é um simulador de reservatório, mas os dados comportam-se de forma credível:
+
+- A pressão na cabeça do poço aproxima-se gradualmente de um valor de
+  equilíbrio, sem saltos impossíveis.
+- Surgem picos ocasionais de pressão (por exemplo, golfadas de gás) que
+  decaem com o tempo. `B17-B` é o poço mais estável; `B17-A` e `B32-C`
+  chegam por vezes à zona crítica.
+- O caudal depende da abertura do choke e da pressão disponível, e a
+  temperatura acompanha o caudal.
+- **Aliviar pressão** abre uma válvula de alívio durante 20 passos: a pressão
+  desce gradualmente e cerca de 30% do caudal é desviado.
+
+Limites por defeito: atenção acima de 135 bar, crítico acima de 150 bar.
+
+## Deteção de anomalias
+
+As regras de limite só veem "pressão acima de 150 bar". O Isolation Forest
+aprende o comportamento habitual do conjunto pressão, temperatura e caudal,
+e marca combinações invulgares, como pressão normal com caudal muito baixo.
+O modelo é treinado na consola de controlo (botão "Retreinar") com os dados
+da base de dados, e a partir daí cada nova leitura é avaliada.
 
 ---
 
-## 💾 Gestão da Base de Dados: Onde e Como são Guardados os Dados?
+## Como executar
 
-### Os dados estão no GitHub?
-**Não.** Os dados não são estáticos nem estão guardados num ficheiro fixo no GitHub. Eles são **gerados dinamicamente em tempo real** assim que o sistema entra em funcionamento.
+### Com Docker (recomendado)
 
-### Como funciona o armazenamento?
-Para garantir respostas extremamente rápidas (latência próxima de zero), a API (`main.py`) utiliza um **armazenamento em memória RAM (*In-Memory Database / Buffer List*)**:
-1. Quando a API inicia, ela cria uma estrutura de dados na memória do container.
-2. Cada leitura enviada pelo simulador é adicionada a esta lista em memória.
-3. Para evitar consumo ilimitado de memória, a API mantém automaticamente um histórico das leituras mais recentes necessárias para alimentar o Dashboard.
-4. **Vantagem arquitetural:** Simula o comportamento de bases de dados de Séries Temporais (*Time-Series Databases* como InfluxDB ou TimescaleDB) utilizadas na indústria para telemetria IoT de alta frequência.
+```bash
+git clone https://github.com/eduardovianga23-j/telemetria-offshore-project.git
+cd telemetria-offshore-project
+cp .env.example .env        # e troque as chaves de API
+docker compose up --build
+```
+
+| Serviço | Endereço |
+|---|---|
+| Dashboard de monitorização | <http://localhost:8501> |
+| Consola de controlo (só nesta máquina) | <http://localhost:8502> |
+| Documentação da API (Swagger) | <http://localhost:8000/docs> |
+
+Para testar um alerta: espere que um poço entre na zona crítica (vermelho)
+e use "Aliviar pressão" na consola. O comando aparece no "Registo de
+comandos" como `PENDENTE` e, segundos depois, como `EXECUTADO`.
+
+### Sem Docker
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
+uvicorn app.main:app --port 8000                  # terminal 1
+python -m app.simulator                           # terminal 2
+streamlit run app/dashboard.py                    # terminal 3 (monitorização)
+CONTROLO_ATIVO=true API_KEY_CONTROLO=dev-controlo \
+  streamlit run app/dashboard.py --server.port 8502   # terminal 4 (consola)
+```
+
+### Testes
+
+```bash
+python -m pytest -v
+```
+
+O CI do GitHub Actions corre os testes, constrói a imagem Docker e confirma
+que a telemetria chega à API.
 
 ---
 
-## 🖥️ Explicação do Dashboard & Lógica do Botão "Aliviar Pressão"
+## Modo Volve (dados reais)
 
-### 1. Visualização e Regras de Negócio
-O Dashboard analisa a pressão do poço selecionado em tempo real e aplica as seguintes regras de segurança da engenharia offshore:
-* 🟢 **NORMAL (Pressão < 130 bar):** Operação segura. Indicadores e cartões exibidos em verde.
-* 🟡 **ATENÇÃO (130 bar ≤ Pressão ≤ 150 bar):** Poço em pré-sobrepressão.
-* 🔴 **CRÍTICO (Pressão > 150 bar):** Alerta vermelho ativado! Risco de paragem iminente e início do cálculo financeiro de perda por queima de gás (*flare*).
+1. Descarregue os dados do Volve na página da Equinor:
+   <https://www.equinor.com/energy/volve-data-sharing>
+2. Copie o ficheiro de produção diária (CSV ou Excel) para a pasta `data/`.
+3. No `.env`, defina `MODO_DADOS=volve` e `VOLVE_NOME_FICHEIRO=<nome do ficheiro>`.
+4. Se a pressão dos poços do Volve for diferente da simulação, ajuste
+   `LIMITE_ATENCAO_BAR` e `LIMITE_CRITICO_BAR`.
+5. `docker compose up --build`
 
-### 2. O Gráfico Dinâmico
-Construído com **Plotly**, exibe a curva temporal da pressão com:
-* Uma **linha limite fixa vermelha em 150 bar**.
-* **Marcadores vermelhos destacados** exatamente nos pontos em que a pressão ultrapassou a zona de segurança.
+Os dados são diários; o gateway reproduz um dia real a cada intervalo, com
+a data original. No modo Volve, os comandos estão desativados, porque são
+dados históricos.
 
-### 3. O Botão "Aliviar Pressão": Lógica, Porquê e Utilidade
-* **Porquê existe?** Na vida real, ao identificar uma sobrepressão perigosa no painel, o engenheiro de operações não pode esperar que o poço pare sozinho. Ele precisa de acionar remotamente uma válvula de alívio (*choke valve*) ou purga de emergência.
-* **Qual é a utilidade?** Permite que o operador execute uma **intervenção corretiva remota em tempo real** diretamente da interface, prevenindo falhas no poço sem precisar de deslocar equipas de manutenção física ao local.
-* **Como funciona a lógica por trás do clique?**
-  1. O operador clica no botão **"Aliviar Pressão"** no Streamlit.
-  2. O Dashboard envia uma requisição `POST` para o endpoint `/poço/{id_poço}/aliviar-pressao` da FastAPI.
-  3. A API interseta o estado atual do poço e aplica um algoritmo que força a redução imediata da pressão para níveis operacionais seguros (ex: ~110 - 120 bar).
-  4. Na atualização seguinte do Dashboard (segundos depois), a curva de pressão cai drasticamente abaixo da linha dos 150 bar e o estado do poço muda instantaneamente de 🔴 **CRÍTICO** para 🟢 **NORMAL**.
+**Licença e atribuição:** dados do campo Volve disponibilizados pela Equinor
+e pelos parceiros da licença, sob a Equinor Open Data Licence. Uso não
+comercial. Os dados não são redistribuídos neste repositório.
 
 ---
 
-## 🚀 Como Executar o Projeto
+## Próximos passos
 
-Podes executar este projeto de **duas formas**: através do **Docker** (recomendado para rodar tudo com um único comando) ou **Manualmente via Python** (instalando as dependências do `requirements.txt`).
+- TimescaleDB para séries temporais
+- MQTT entre o campo e a API
+- Prometheus e Grafana para métricas do próprio sistema
+- Publicação do dashboard de monitorização na cloud com Cloudflare Tunnel e Access
+- Infraestrutura como código (Terraform) em AWS e Azure
 
----
+## Tecnologias
 
-### 🐳 Opção A: Execução via Docker (Recomendada)
-
-Com o Docker, **não precisas de instalar o `requirements.txt` na tua máquina física**. O Docker cria ambientes isolados, instala as dependências internamente e inicia a API, o Simulador e o Dashboard simultaneamente.
-
-Para Iniciar os containers com Docker Compose, instalar as dependências, executar o programa, com um único comando no terminal: `docker-compose up --build`
-
-## 🌐 Acesso aos Serviços (Com o Docker a correr)
-
-Assim que executares `docker compose up --build`, podes aceder aos serviços nos seguintes endereços locais:
-
-* **📊 Dashboard de Operação (Streamlit):** [http://localhost:8501](http://localhost:8501)
-* **⚙️ Documentação da API (FastAPI / Swagger):** [http://localhost:8000/docs](http://localhost:8000/docs)
-
-
-1. **Clonar o repositório:**
-   ```bash
-   git clone [https://github.com/eduardovianga23-j/telemetria-poço-offshore.git](https://github.com/eduardovianga23-j/telemetria-poço-offshore.git)
-   cd telemetria-poço-offshore
+Python 3.13 · FastAPI · SQLAlchemy · Streamlit · Plotly · pandas ·
+scikit-learn · Docker Compose · GitHub Actions · pytest

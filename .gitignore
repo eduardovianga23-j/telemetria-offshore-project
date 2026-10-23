@@ -1,4 +1,11 @@
-.venv/
+.venv*/
 __pycache__/
+.pytest_cache/
 *.db
+*.joblib
+models/
+.env
 .DS_Store
+# Dados do Volve: licença da Equinor, não redistribuir
+data/*
+!data/LEIA-ME.md

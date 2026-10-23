@@ -1,33 +1,70 @@
-version: '3.8'
+# Arranque:  cp .env.example .env  &&  docker compose up --build
+#
+# Serviços:
+#   api       API central + base de dados (porta 8000)
+#   campo     gateway de campo: simulação dos Blocos 17 e 32 ou replay do Volve
+#   monitor   dashboard só de leitura (porta 8501) — o que se publicaria
+#   consola   consola de controlo (porta 8502), presa a 127.0.0.1: só acessível nesta máquina
+
+x-base: &base
+  build: .
+  image: telemetria-offshore:latest
+  env_file: .env
+  restart: unless-stopped
 
 services:
-  # 🔌 Serviço 1: Backend / API (FastAPI + Simulator + ML)
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile.api
-    container_name: telemetria_api
+    <<: *base
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      DB_URL: sqlite:////data/telemetria.db
+      MODEL_PATH: /data/modelo_anomalias.joblib
+    volumes:
+      - dados:/data
     ports:
       - "8000:8000"
-    volumes:
-      # Mapeia a base de dados SQLite e os modelos ML para não perder dados ao reiniciar
-      - ./telemetria.db:/app/telemetria.db
-      - ./app:/app/app
-    restart: always
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
-  # 📊 Serviço 2: Frontend / Dashboard (Streamlit)
-  dashboard:
-    build:
-      context: .
-      dockerfile: Dockerfile.dash
-    container_name: telemetria_dashboard
+  campo:
+    <<: *base
+    command: ["python", "-m", "app.simulator"]
+    environment:
+      BASE_API_URL: http://api:8000
+      VOLVE_FICHEIRO: /volve/${VOLVE_NOME_FICHEIRO:-volve_producao.csv}
+    volumes:
+      - ./data:/volve:ro
+    depends_on:
+      api:
+        condition: service_healthy
+
+  monitor:
+    <<: *base
+    command: ["streamlit", "run", "app/dashboard.py", "--server.port=8501", "--server.address=0.0.0.0"]
+    environment:
+      BASE_API_URL: http://api:8000
+      CONTROLO_ATIVO: "false"
+      API_KEY_CONTROLO: ""
     ports:
       - "8501:8501"
-    environment:
-      # Aponta para o nome do serviço 'api' na rede interna do Docker!
-      - BASE_API_URL=http://api:8000
     depends_on:
-      - api
-    volumes:
-      - ./app:/app/app
-    restart: always
+      api:
+        condition: service_healthy
+
+  consola:
+    <<: *base
+    command: ["streamlit", "run", "app/dashboard.py", "--server.port=8501", "--server.address=0.0.0.0"]
+    environment:
+      BASE_API_URL: http://api:8000
+      CONTROLO_ATIVO: "true"
+    ports:
+      - "127.0.0.1:8502:8501"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  dados:

@@ -1,107 +1,207 @@
-import asyncio
+"""API central do Digital Twin.
+
+Separação de responsabilidades (como numa operação real):
+- O campo (simulador ou gateway) ENVIA telemetria e VAI BUSCAR comandos.
+  Usa a chave de ingestão.
+- A consola de controlo CRIA comandos e retreina o modelo.
+  Usa a chave de controlo, que o dashboard de monitorização não tem.
+- As leituras de monitorização são só de leitura. Num ambiente real ficam
+  atrás de uma camada de acesso, como o Cloudflare Access.
+"""
+from __future__ import annotations
+
+import hmac
 from contextlib import asynccontextmanager
-from datetime import datetime
-from typing import List, Optional
+from datetime import datetime, timezone
+from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, status
-from pydantic import BaseModel, Field
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
-# IMPORTANTE: Ajusta o caminho da importação abaixo caso a tua função/módulo do simulador
-# esteja em outro ficheiro (ex: de run import simular_telemetria ou app.simulator import simular_telemetria)
-from run import simular_telemetria
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # --- INICIALIZAÇÃO: Roda o simulador em background ---
-    # Usamos asyncio.to_thread para não bloquear o loop principal do FastAPI caso a simulação use time.sleep
-    task = asyncio.create_task(asyncio.to_thread(simular_telemetria))
-    print("🚀 Simulador de telemetria iniciado em segundo plano!")
-    
-    yield  # A API fica em execução aqui
-    
-    # --- ENCERRAMENTO: Cancela a tarefa ao desligar ---
-    task.cancel()
-
-
-app = FastAPI(
-    title="Digital Twin - API Offshore",
-    description="API REST para receção de telemetria, comandos remotos e MLOps",
-    version="1.0.0",
-    lifespan=lifespan
+from app.config import classificar_pressao, get_settings
+from app.database import get_db, init_db
+from app.ml_engine import MLEngine
+from app.models import ComandoModel, TelemetriaModel
+from app.schemas import (
+    ComandoConfirmacao,
+    ComandoIn,
+    ComandoOut,
+    InfoSistema,
+    ResumoPoco,
+    TelemetriaIn,
+    TelemetriaOut,
 )
 
-db_telemetria: List[dict] = []
+DB = Annotated[Session, Depends(get_db)]
 
-class TelemetriaInput(BaseModel):
-    poco_id: str = Field(..., json_schema_extra={"example": "POCO-01"})
-    pressao_bar: float = Field(..., json_schema_extra={"example": 120.5})
-    temperatura_celsius: float = Field(..., json_schema_extra={"example": 65.2})
-    vazao_m3h: Optional[float] = Field(default=0.0, json_schema_extra={"example": 45.0})
-    status_seguranca: Optional[str] = Field(default="OK", json_schema_extra={"example": "OK"})
-    timestamp: Optional[str] = Field(default=None)
 
-class ComandoInput(BaseModel):
-    poco_id: str = Field(..., json_schema_extra={"example": "POCO-01"})
-    acao: str = Field(..., json_schema_extra={"example": "ALIVIAR_PRESSAO"})
+def _verificar_chave(recebida: str | None, esperada: str) -> None:
+    if recebida is None or not hmac.compare_digest(recebida, esperada):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Chave de API inválida ou em falta.")
 
-@app.get("/")
-def root():
-    return {"status": "online", "message": "API Offshore Digital Twin a rodar com sucesso!"}
 
-@app.post("/api/telemetria", status_code=status.HTTP_201_CREATED)
-def receber_telemetria(dado: TelemetriaInput):
-    registro = dado.model_dump()  # Compatível com Pydantic v2
-    if not registro.get("timestamp"):
-        registro["timestamp"] = datetime.now().isoformat()
-    
-    if registro["pressao_bar"] > 150.0:
-        registro["status_seguranca"] = "CRÍTICO"
-    elif registro["pressao_bar"] > 135.0:
-        registro["status_seguranca"] = "ATENÇÃO"
-    
-    db_telemetria.append(registro)
-    
-    if len(db_telemetria) > 1000:
-        db_telemetria.pop(0)
-        
-    return {"message": "Telemetria recebida com sucesso", "registro": registro}
+def exige_ingestao(x_api_key: Annotated[str | None, Header()] = None) -> None:
+    _verificar_chave(x_api_key, get_settings().chave_ingestao)
 
-@app.get("/api/historico")
-def obter_historico():
-    return db_telemetria
 
-@app.post("/api/comando")
-def enviar_comando(comando: ComandoInput):
-    poco = comando.poco_id
-    acao = comando.acao
-    
-    for item in reversed(db_telemetria):
-        if item["poco_id"] == poco:
-            item["pressao_bar"] = max(100.0, item["pressao_bar"] - 30.0)
-            item["status_seguranca"] = "OK"
-            break
-            
-    return {
-        "status": "sucesso",
-        "mensagem": f"Comando '{acao}' executado com sucesso no poço {poco}."
-    }
+def exige_controlo(x_api_key: Annotated[str | None, Header()] = None) -> None:
+    _verificar_chave(x_api_key, get_settings().chave_controlo)
 
-@app.post("/api/ml/retreinar")
-def retreinar_modelo():
-    total = len(db_telemetria)
-    if total < 5:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Dados insuficientes na Base de Dados para treinar o modelo (mínimo 5 registos)."
+
+def create_app() -> FastAPI:
+    ml = MLEngine()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        init_db(get_settings().db_url)
+        yield
+
+    app = FastAPI(
+        title="Digital Twin — Telemetria Offshore",
+        description="Telemetria, comandos auditados e deteção de anomalias para poços offshore (dados simulados ou Volve).",
+        version="2.0.0",
+        lifespan=lifespan,
+    )
+    app.state.ml = ml
+
+    # ---------------------------------------------------------------- sistema
+    @app.get("/health", tags=["sistema"])
+    def health() -> dict:
+        return {"status": "ok"}
+
+    @app.get("/api/info", response_model=InfoSistema, tags=["sistema"])
+    def info() -> InfoSistema:
+        s = get_settings()
+        return InfoSistema(
+            modo_dados=s.modo_dados,
+            limite_atencao_bar=s.limite_atencao,
+            limite_critico_bar=s.limite_critico,
+            preco_barril_usd=s.preco_barril_usd,
+            modelo_ml_treinado=ml.treinado,
         )
-    
-    anomalias = sum(1 for item in db_telemetria if item.get("status_seguranca") in ["CRÍTICO", "ATENÇÃO"])
-    taxa = round((anomalias / total) * 100, 2)
-    
-    return {
-        "status": "concluido",
-        "total_amostras": total,
-        "anomalias_encontradas": anomalias,
-        "taxa_anomalias_pct": taxa
-    }
+
+    # ------------------------------------------------------------- telemetria
+    @app.post(
+        "/api/telemetria",
+        response_model=TelemetriaOut,
+        status_code=status.HTTP_201_CREATED,
+        dependencies=[Depends(exige_ingestao)],
+        tags=["campo"],
+    )
+    def receber_telemetria(dado: TelemetriaIn, db: DB) -> TelemetriaModel:
+        ts = dado.timestamp or datetime.now(timezone.utc)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        registo = TelemetriaModel(
+            poco_id=dado.poco_id,
+            timestamp=ts,
+            pressao_bar=dado.pressao_bar,
+            temperatura_celsius=dado.temperatura_celsius,
+            caudal_oleo_m3h=dado.caudal_oleo_m3h,
+            abertura_choke_pct=dado.abertura_choke_pct,
+            status_seguranca=classificar_pressao(dado.pressao_bar),
+            anomalia_ml=ml.e_anomalia(dado.pressao_bar, dado.temperatura_celsius, dado.caudal_oleo_m3h),
+            fonte=dado.fonte,
+        )
+        db.add(registo)
+        db.commit()
+        db.refresh(registo)
+        return registo
+
+    @app.get("/api/historico", response_model=list[TelemetriaOut], tags=["monitorização"])
+    def historico(
+        db: DB,
+        poco_id: str | None = None,
+        limit: Annotated[int, Query(ge=1, le=5000)] = 500,
+    ) -> list[TelemetriaModel]:
+        consulta = select(TelemetriaModel)
+        if poco_id:
+            consulta = consulta.where(TelemetriaModel.poco_id == poco_id)
+        consulta = consulta.order_by(TelemetriaModel.id.desc()).limit(limit)
+        return list(reversed(db.scalars(consulta).all()))
+
+    @app.get("/api/pocos", response_model=list[ResumoPoco], tags=["monitorização"])
+    def pocos(db: DB) -> list[ResumoPoco]:
+        ultimos = select(func.max(TelemetriaModel.id)).group_by(TelemetriaModel.poco_id)
+        linhas = db.scalars(select(TelemetriaModel).where(TelemetriaModel.id.in_(ultimos))).all()
+        return [
+            ResumoPoco(
+                poco_id=l.poco_id,
+                ultima_leitura=l.timestamp,
+                pressao_bar=l.pressao_bar,
+                status_seguranca=l.status_seguranca,
+                fonte=l.fonte,
+            )
+            for l in sorted(linhas, key=lambda l: l.poco_id)
+        ]
+
+    # --------------------------------------------------------------- comandos
+    @app.post(
+        "/api/comando",
+        response_model=ComandoOut,
+        status_code=status.HTTP_202_ACCEPTED,
+        dependencies=[Depends(exige_controlo)],
+        tags=["controlo"],
+    )
+    def criar_comando(comando: ComandoIn, db: DB) -> ComandoModel:
+        if get_settings().modo_dados == "volve":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Modo Volve: os dados são um replay histórico e não aceitam comandos.",
+            )
+        existe = db.scalar(select(TelemetriaModel.id).where(TelemetriaModel.poco_id == comando.poco_id).limit(1))
+        if existe is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Poço '{comando.poco_id}' desconhecido.")
+        registo = ComandoModel(poco_id=comando.poco_id, acao=comando.acao, operador=comando.operador)
+        db.add(registo)
+        db.commit()
+        db.refresh(registo)
+        return registo
+
+    @app.get("/api/comandos", response_model=list[ComandoOut], tags=["monitorização"])
+    def listar_comandos(db: DB, limit: Annotated[int, Query(ge=1, le=500)] = 50) -> list[ComandoModel]:
+        return list(db.scalars(select(ComandoModel).order_by(ComandoModel.id.desc()).limit(limit)).all())
+
+    @app.get(
+        "/api/comandos/pendentes",
+        response_model=list[ComandoOut],
+        dependencies=[Depends(exige_ingestao)],
+        tags=["campo"],
+    )
+    def comandos_pendentes(db: DB) -> list[ComandoModel]:
+        return list(
+            db.scalars(select(ComandoModel).where(ComandoModel.estado == "PENDENTE").order_by(ComandoModel.id)).all()
+        )
+
+    @app.post(
+        "/api/comandos/{comando_id}/confirmacao",
+        response_model=ComandoOut,
+        dependencies=[Depends(exige_ingestao)],
+        tags=["campo"],
+    )
+    def confirmar_comando(comando_id: int, confirmacao: ComandoConfirmacao, db: DB) -> ComandoModel:
+        registo = db.get(ComandoModel, comando_id)
+        if registo is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Comando não encontrado.")
+        if registo.estado != "PENDENTE":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Comando já está {registo.estado}.")
+        registo.estado = confirmacao.estado
+        registo.detalhe = confirmacao.detalhe
+        registo.executado_em = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(registo)
+        return registo
+
+    # --------------------------------------------------------------------- ML
+    @app.post("/api/ml/retreinar", dependencies=[Depends(exige_controlo)], tags=["controlo"])
+    def retreinar(db: DB) -> dict:
+        resultado = ml.retreinar(db)
+        if not resultado["sucesso"]:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=resultado["mensagem"])
+        return resultado
+
+    return app
+
+
+app = create_app()
