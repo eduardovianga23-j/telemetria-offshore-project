@@ -1,9 +1,9 @@
 # Arranque:  cp .env.example .env  &&  docker compose up --build
 #
 # Serviços:
-#   api       API central + base de dados (porta 8000)
+#   api       API central + base de dados (porta 8000, só nesta máquina)
 #   campo     gateway de campo: simulação dos Blocos 17 e 32 ou replay do Volve
-#   monitor   dashboard só de leitura (porta 8501) — o que se publicaria
+#   monitor   dashboard só de leitura (porta 8501, só nesta máquina) — o túnel publica-o
 #   consola   consola de controlo (porta 8502), presa a 127.0.0.1: só acessível nesta máquina
 #   tunel     (opcional) publica SÓ o monitor na internet com Cloudflare, protegido por e-mail
 #             docker compose --profile publico up -d   ·   endereço: docker compose logs tunel
@@ -24,7 +24,7 @@ services:
     volumes:
       - dados:/data
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 5s
@@ -51,7 +51,7 @@ services:
       CONTROLO_ATIVO: "false"
       API_KEY_CONTROLO: ""
     ports:
-      - "8501:8501"
+      - "127.0.0.1:8501:8501"
     depends_on:
       api:
         condition: service_healthy
