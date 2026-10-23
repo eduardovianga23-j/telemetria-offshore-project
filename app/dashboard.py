@@ -21,8 +21,10 @@ import streamlit as st
 
 try:  # a correr como pacote (testes)
     from app.i18n import COLUNAS, idioma_atual, t, v
+    from app.series import com_quebras
 except ImportError:  # a correr com "streamlit run app/dashboard.py"
     from i18n import COLUNAS, idioma_atual, t, v
+    from series import com_quebras
 
 BASE_API_URL = os.getenv("BASE_API_URL", "http://127.0.0.1:8000").rstrip("/")
 CONTROLO_ATIVO = os.getenv("CONTROLO_ATIVO", "false").lower() == "true"
@@ -90,6 +92,8 @@ except requests.RequestException as e:
     st.stop()
 
 MODO_VOLVE = info["modo_dados"] == "volve"
+# Intervalo a partir do qual o gráfico parte a linha (Volve: dados diários)
+LIMIAR_QUEBRA = pd.Timedelta(days=30) if MODO_VOLVE else pd.Timedelta(minutes=2)
 LIM_ATENCAO = info["limite_atencao_bar"]
 LIM_CRITICO = info["limite_critico_bar"]
 PRECO_M3 = info["preco_barril_usd"] / M3_POR_BARRIL
@@ -135,7 +139,8 @@ if CONTROLO_ATIVO:
 def grafico_pressao(df: pd.DataFrame) -> go.Figure:
     fig = go.Figure()
     for poco, g in df.groupby("poco_id"):
-        fig.add_trace(go.Scatter(x=g["timestamp"], y=g["pressao_bar"], mode="lines", name=poco))
+        xs, ys = com_quebras(g, "pressao_bar", LIMIAR_QUEBRA)
+        fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name=poco, connectgaps=False))
     crit = df[df["status_seguranca"] == "CRÍTICO"]
     if not crit.empty:
         fig.add_trace(
@@ -157,7 +162,8 @@ def grafico_pressao(df: pd.DataFrame) -> go.Figure:
 def grafico_simples(df: pd.DataFrame, coluna: str, unidade: str) -> go.Figure:
     fig = go.Figure()
     for poco, g in df.groupby("poco_id"):
-        fig.add_trace(go.Scatter(x=g["timestamp"], y=g[coluna], mode="lines", name=poco))
+        xs, ys = com_quebras(g, coluna, LIMIAR_QUEBRA)
+        fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name=poco, connectgaps=False))
     fig.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10), yaxis_title=unidade, legend_title_text="")
     return fig
 

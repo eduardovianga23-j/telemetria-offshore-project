@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from datetime import datetime
 
 import requests
 
@@ -32,6 +33,11 @@ class ClienteAPI:
     def enviar(self, leitura: dict) -> None:
         r = self.sessao.post(f"{self.base_url}/api/telemetria", json=leitura, timeout=self.timeout)
         r.raise_for_status()
+
+    def retoma(self, fonte: str) -> dict:
+        r = self.sessao.get(f"{self.base_url}/api/campo/retoma", params={"fonte": fonte}, timeout=self.timeout)
+        r.raise_for_status()
+        return r.json()
 
     def pendentes(self) -> list[dict]:
         r = self.sessao.get(f"{self.base_url}/api/comandos/pendentes", timeout=self.timeout)
@@ -80,19 +86,41 @@ def correr_simulacao(cliente: ClienteAPI, intervalo_s: float) -> None:
         time.sleep(intervalo_s)
 
 
+def dias_por_enviar(dias: Iterable[list[dict]], retoma: dict) -> Iterator[list[dict]]:
+    """Salta os dias que a API já tem; no último dia recebido, envia só os poços em falta."""
+    if not retoma.get("ultimo_timestamp"):
+        yield from dias
+        return
+    ultimo = datetime.fromisoformat(retoma["ultimo_timestamp"])
+    ja_enviados = set(retoma.get("pocos_no_ultimo", []))
+    for leituras in dias:
+        dia = datetime.fromisoformat(leituras[0]["timestamp"])
+        if dia < ultimo:
+            continue
+        if dia == ultimo:
+            leituras = [l for l in leituras if l["poco_id"] not in ja_enviados]
+            if not leituras:
+                continue
+        yield leituras
+
+
+def _com_nova_tentativa(funcao, intervalo_s: float):
+    while True:
+        try:
+            return funcao()
+        except requests.RequestException as e:
+            print(f"[campo] API indisponível ({e}); nova tentativa em breve.")
+            time.sleep(intervalo_s)
+
+
 def correr_volve(cliente: ClienteAPI, caminho: str, intervalo_s: float) -> None:
     df = carregar_producao(caminho)
     print(f"[campo] Replay Volve: {len(df)} leituras de {df['poco_id'].nunique()} poços. {ATRIBUICAO}")
-    dias: Iterable[list[dict]] = dias_de_producao(df)
-    for leituras in dias:
-        while True:
-            try:
-                for leitura in leituras:
-                    cliente.enviar(leitura)
-                break
-            except requests.RequestException as e:
-                print(f"[campo] API indisponível ({e}); nova tentativa em breve.")
-                time.sleep(intervalo_s)
+    retoma = _com_nova_tentativa(lambda: cliente.retoma("volve"), intervalo_s)
+    if retoma.get("ultimo_timestamp"):
+        print(f"[campo] A retomar o replay depois de {retoma['ultimo_timestamp'][:10]}.")
+    for leituras in dias_por_enviar(dias_de_producao(df), retoma):
+        _com_nova_tentativa(lambda: [cliente.enviar(l) for l in leituras], intervalo_s)
         time.sleep(intervalo_s)
     print("[campo] Replay Volve concluído. O histórico completo está na base de dados.")
     while True:

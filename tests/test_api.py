@@ -100,3 +100,30 @@ def test_retreino_e_deteccao_de_anomalias(client):
     assert normal["anomalia_ml"] is False
     assert estranha["anomalia_ml"] is True
     assert estranha["status_seguranca"] == "OK"  # a regra de limite não a apanha; o modelo sim
+
+
+def test_leitura_repetida_nao_duplica(client):
+    l = leitura(pressao=60.0, timestamp="2014-01-01T00:00:00Z", fonte="volve")
+    primeira = client.post("/api/telemetria", json=l, headers=INGESTAO).json()
+    segunda = client.post("/api/telemetria", json=l, headers=INGESTAO).json()
+    assert primeira["id"] == segunda["id"]
+    assert len(client.get("/api/historico").json()) == 1
+
+
+def test_leituras_sem_data_nunca_sao_juntas(client):
+    # A simulação não envia data: cada leitura é nova, mesmo com valores iguais
+    client.post("/api/telemetria", json=leitura(), headers=INGESTAO)
+    client.post("/api/telemetria", json=leitura(), headers=INGESTAO)
+    assert len(client.get("/api/historico").json()) == 2
+
+
+def test_ponto_de_retoma(client):
+    assert client.get("/api/campo/retoma").status_code == 401
+    vazio = client.get("/api/campo/retoma", headers=INGESTAO).json()
+    assert vazio["ultimo_timestamp"] is None
+    for poco, dia in (("A", "2014-01-01"), ("A", "2014-01-02"), ("B", "2014-01-02")):
+        client.post("/api/telemetria", json=leitura(poco=poco, timestamp=f"{dia}T00:00:00Z", fonte="volve"),
+                    headers=INGESTAO)
+    r = client.get("/api/campo/retoma", headers=INGESTAO).json()
+    assert r["ultimo_timestamp"].startswith("2014-01-02")
+    assert r["pocos_no_ultimo"] == ["A", "B"]

@@ -34,3 +34,19 @@ def test_comando_chega_ao_poco_e_fica_auditado(client):
     assert not estados["B17-A"].alivio_ativo
     registo = client.get("/api/comandos").json()[0]
     assert registo["estado"] == "EXECUTADO" and registo["executado_em"] is not None
+
+
+def test_replay_retoma_onde_parou():
+    from app.simulator import dias_por_enviar
+
+    def dia(d, *pocos):
+        return [{"timestamp": f"2014-01-0{d}T00:00:00+00:00", "poco_id": p} for p in pocos]
+
+    dias = [dia(1, "A", "B"), dia(2, "A", "B"), dia(3, "A", "B")]
+    # Sem histórico: envia tudo
+    assert len(list(dias_por_enviar(dias, {"ultimo_timestamp": None}))) == 3
+    # Parou a meio do dia 2 (só o A chegou): envia o B do dia 2 e o dia 3
+    restantes = list(dias_por_enviar(dias, {"ultimo_timestamp": "2014-01-02T00:00:00+00:00", "pocos_no_ultimo": ["A"]}))
+    assert [[l["poco_id"] for l in d] for d in restantes] == [["B"], ["A", "B"]]
+    # Dia 3 já completo: nada a enviar
+    assert list(dias_por_enviar(dias, {"ultimo_timestamp": "2014-01-03T00:00:00+00:00", "pocos_no_ultimo": ["A", "B"]})) == []

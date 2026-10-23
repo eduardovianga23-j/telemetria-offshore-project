@@ -93,6 +93,19 @@ def create_app() -> FastAPI:
         ts = dado.timestamp or datetime.now(timezone.utc)
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
+        ts = ts.astimezone(timezone.utc)
+        # Ingestão idempotente: se o campo voltar a enviar a mesma leitura
+        # (mesmo poço, mesma data e hora, mesma fonte), não se duplica.
+        if dado.timestamp is not None:
+            existente = db.scalar(
+                select(TelemetriaModel).where(
+                    TelemetriaModel.poco_id == dado.poco_id,
+                    TelemetriaModel.timestamp == ts,
+                    TelemetriaModel.fonte == dado.fonte,
+                )
+            )
+            if existente is not None:
+                return existente
         registo = TelemetriaModel(
             poco_id=dado.poco_id,
             timestamp=ts,
@@ -108,6 +121,19 @@ def create_app() -> FastAPI:
         db.commit()
         db.refresh(registo)
         return registo
+
+    @app.get("/api/campo/retoma", dependencies=[Depends(exige_ingestao)], tags=["campo"])
+    def ponto_de_retoma(db: DB, fonte: str = "volve") -> dict:
+        """Último instante já recebido de uma fonte, para o campo continuar onde parou."""
+        ultimo = db.scalar(select(func.max(TelemetriaModel.timestamp)).where(TelemetriaModel.fonte == fonte))
+        if ultimo is None:
+            return {"fonte": fonte, "ultimo_timestamp": None, "pocos_no_ultimo": []}
+        pocos = db.scalars(
+            select(TelemetriaModel.poco_id).where(TelemetriaModel.fonte == fonte, TelemetriaModel.timestamp == ultimo)
+        ).all()
+        if ultimo.tzinfo is None:
+            ultimo = ultimo.replace(tzinfo=timezone.utc)
+        return {"fonte": fonte, "ultimo_timestamp": ultimo.isoformat(), "pocos_no_ultimo": sorted(set(pocos))}
 
     @app.get("/api/historico", response_model=list[TelemetriaOut], tags=["monitorização"])
     def historico(
