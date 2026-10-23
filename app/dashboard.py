@@ -93,7 +93,7 @@ except requests.RequestException as e:
 
 MODO_VOLVE = info["modo_dados"] == "volve"
 # Intervalo a partir do qual o gráfico parte a linha (Volve: dados diários)
-LIMIAR_QUEBRA = pd.Timedelta(days=30) if MODO_VOLVE else pd.Timedelta(minutes=2)
+LIMIAR_QUEBRA = pd.Timedelta(days=3) if MODO_VOLVE else pd.Timedelta(minutes=2)
 LIM_ATENCAO = info["limite_atencao_bar"]
 LIM_CRITICO = info["limite_critico_bar"]
 PRECO_M3 = info["preco_barril_usd"] / M3_POR_BARRIL
