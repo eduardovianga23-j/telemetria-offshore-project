@@ -91,6 +91,9 @@ def test_retreino_e_deteccao_de_anomalias(client):
 
     r = client.post("/api/ml/retreinar", headers=CONTROLO)
     assert r.status_code == 200 and r.json()["total_amostras"] == 120
+    # O histórico foi reavaliado: as leituras antigas já têm avaliação do modelo
+    assert r.json()["leituras_reavaliadas"] == 120
+    assert all(x["anomalia_ml"] is not None for x in client.get("/api/historico").json())
     assert client.get("/api/info").json()["modelo_ml_treinado"] is True
 
     normal = client.post("/api/telemetria", json=estado.passo(), headers=INGESTAO).json()

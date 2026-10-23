@@ -13,7 +13,7 @@ from pathlib import Path
 import joblib
 import pandas as pd
 from sklearn.ensemble import IsolationForest
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.models import TelemetriaModel
@@ -62,13 +62,45 @@ class MLEngine:
         self.model = modelo
 
         anomalias = int((modelo.predict(df[FEATURES]) == -1).sum())
+        reavaliadas = self.reavaliar_historico(db)
         return {
             "sucesso": True,
-            "mensagem": "Modelo retreinado e guardado.",
+            "mensagem": "Modelo retreinado e guardado; histórico reavaliado com o modelo novo.",
             "total_amostras": len(df),
             "anomalias_encontradas": anomalias,
             "taxa_anomalias_pct": round(anomalias / len(df) * 100, 2),
+            "leituras_reavaliadas": reavaliadas,
         }
+
+    def reavaliar_historico(self, db: Session, lote: int = 5000) -> int:
+        """Volta a avaliar todas as leituras guardadas com o modelo atual.
+
+        Sem isto, só as leituras que chegam depois do treino teriam avaliação,
+        e o histórico ficava sem anomalias marcadas.
+        """
+        if self.model is None:
+            return 0
+        total = 0
+        ultimo_id = 0
+        while True:
+            linhas = db.execute(
+                select(TelemetriaModel.id, *[getattr(TelemetriaModel, f) for f in FEATURES])
+                .where(TelemetriaModel.id > ultimo_id)
+                .order_by(TelemetriaModel.id)
+                .limit(lote)
+            ).all()
+            if not linhas:
+                break
+            df = pd.DataFrame(linhas, columns=["id", *FEATURES])
+            previsoes = self.model.predict(df[FEATURES]) == -1
+            db.execute(
+                update(TelemetriaModel),
+                [{"id": int(i), "anomalia_ml": bool(a)} for i, a in zip(df["id"], previsoes)],
+            )
+            total += len(df)
+            ultimo_id = int(df["id"].iloc[-1])
+        db.commit()
+        return total
 
     def e_anomalia(self, pressao: float, temperatura: float, caudal: float) -> bool | None:
         """True/False se o modelo estiver treinado; None se ainda não houver modelo."""
