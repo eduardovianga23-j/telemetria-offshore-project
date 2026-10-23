@@ -5,6 +5,8 @@
 #   campo     gateway de campo: simulação dos Blocos 17 e 32 ou replay do Volve
 #   monitor   dashboard só de leitura (porta 8501) — o que se publicaria
 #   consola   consola de controlo (porta 8502), presa a 127.0.0.1: só acessível nesta máquina
+#   tunel     (opcional) publica SÓ o monitor na internet com Cloudflare, protegido por e-mail
+#             docker compose --profile publico up -d   ·   endereço: docker compose logs tunel
 
 x-base: &base
   build: .
@@ -65,6 +67,25 @@ services:
     depends_on:
       api:
         condition: service_healthy
+
+  tunel:
+    # Cloudflare Quick Tunnel: o contentor abre uma ligação de SAÍDA para a
+    # Cloudflare, por isso não é preciso abrir portas no router. Só quem tiver
+    # um e-mail autorizado entra (código de uso único enviado por e-mail).
+    # Só o monitor é publicado; a consola nunca sai da máquina local.
+    image: cloudflare/cloudflared:latest
+    profiles: ["publico"]
+    command:
+      - tunnel
+      - --no-autoupdate
+      - --url
+      - http://monitor:8501
+      - --allowed-mail
+      # Sem ACESSO_EMAILS no .env, ninguém consegue entrar (falha fechada)
+      - ${ACESSO_EMAILS:-ninguem@acesso-nao-configurado.invalid}
+    depends_on:
+      - monitor
+    restart: unless-stopped
 
 volumes:
   dados:

@@ -139,6 +139,29 @@ que a telemetria chega à API.
 
 ---
 
+## Publicar o monitor na internet (Cloudflare)
+
+O serviço opcional `tunel` publica **apenas o dashboard de monitorização**
+com um Cloudflare Quick Tunnel:
+
+- O contentor abre uma ligação **de saída** para a Cloudflare: não se abrem
+  portas no router nem se expõe o computador.
+- Só entra quem tiver um e-mail da lista `ACESSO_EMAILS` (no `.env`), com um
+  código de uso único enviado para esse e-mail.
+- A consola de controlo **nunca** é publicada: continua presa a `127.0.0.1`.
+
+```bash
+docker compose --profile publico up -d
+docker compose logs tunel     # procure o endereço https://....trycloudflare.com
+```
+
+Limitações dos Quick Tunnels: o endereço é temporário (muda a cada arranque) e
+não há garantia de disponibilidade. Para um endereço fixo, o passo seguinte é
+um túnel com nome no Cloudflare Zero Trust, com um domínio próprio e uma
+política de Access.
+
+---
+
 ## Modo Volve (dados reais)
 
 1. Descarregue os dados do Volve na página da Equinor:
@@ -164,7 +187,7 @@ comercial. Os dados não são redistribuídos neste repositório.
 - TimescaleDB para séries temporais
 - MQTT entre o campo e a API
 - Prometheus e Grafana para métricas do próprio sistema
-- Publicação do dashboard de monitorização na cloud com Cloudflare Tunnel e Access
+- Túnel com nome e domínio próprio no Cloudflare Zero Trust (endereço fixo e políticas de Access)
 - Infraestrutura como código (Terraform) em AWS e Azure
 
 ## Tecnologias

@@ -46,6 +46,8 @@ def test_filtra_linhas_invalidas(tmp_path):
         linha("01-Jan-2014", "C", oleo=0),  # sem produção
         linha("01-Jan-2014", "D", flow="injection"),  # injetor
         linha("01-Jan-2014", "E", whp=None),  # sem pressão
+        linha("01-Jan-2014", "F", whp=0.0),  # sensor sem leitura
+        linha("01-Jan-2014", "G", horas=0.2),  # aberto só 12 minutos
     ]
     assert carregar_producao(escrever(tmp_path, linhas))["poco_id"].tolist() == ["A"]
 

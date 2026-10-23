@@ -34,6 +34,11 @@ ATRIBUICAO = (
 )
 
 
+# Dias com o poço aberto menos do que isto dão caudais irrealistas
+# (óleo do dia a dividir por poucos minutos).
+HORAS_MINIMAS = 1.0
+
+
 class ErroVolve(ValueError):
     pass
 
@@ -66,8 +71,10 @@ def carregar_producao(caminho: str | Path) -> pd.DataFrame:
     if COLUNAS["tipo_fluxo"] in df.columns:
         df = df[df[COLUNAS["tipo_fluxo"]].astype(str).str.lower() == "production"]
 
-    df = df[(df[COLUNAS["horas"]] > 0) & (df[COLUNAS["oleo"]] > 0)]
+    df = df[(df[COLUNAS["horas"]] >= HORAS_MINIMAS) & (df[COLUNAS["oleo"]] > 0)]
     df = df.dropna(subset=[COLUNAS["pressao"], COLUNAS["temperatura"]])
+    # Em dados reais, pressão ou temperatura a zero significam sensor sem leitura
+    df = df[(df[COLUNAS["pressao"]] > 0) & (df[COLUNAS["temperatura"]] > 0)]
 
     saida = pd.DataFrame(
         {
