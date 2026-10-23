@@ -116,6 +116,25 @@ Para testar um alerta: espere que um poço entre na zona crítica (vermelho)
 e use "Aliviar pressão" na consola. O comando aparece no "Registo de
 comandos" como `PENDENTE` e, segundos depois, como `EXECUTADO`.
 
+### Comandos do dia a dia
+
+Corra-os na pasta do projeto. Antes, abra o Docker Desktop e espere por "Engine running".
+
+| Para... | Comando |
+|---|---|
+| Ligar tudo em segundo plano | `docker compose up -d` |
+| Ligar tudo e o túnel da Cloudflare | `docker compose --profile publico up -d` |
+| Ligar depois de alterar o código | `docker compose up --build -d` |
+| Ver o estado dos serviços | `docker compose ps` |
+| Ver os logs em direto (Ctrl+C para sair) | `docker compose logs -f` ou `docker compose logs -f api` |
+| Ver o endereço atual do túnel | `docker compose logs tunel \| grep -i trycloudflare.com \| tail -1` |
+| Desligar só o túnel | `docker compose stop tunel` |
+| Desligar tudo (os dados ficam guardados) | `docker compose --profile publico down` |
+| Desligar tudo e **apagar** os dados | `docker compose --profile publico down -v` |
+
+Se arrancou com `docker compose up` sem `-d`, os logs ficam no terminal e
+`Ctrl+C` desliga o sistema.
+
 ### Sem Docker
 
 ```bash
